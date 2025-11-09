@@ -1,6 +1,7 @@
 from socket import *
 import sys
 import os
+import mimetypes
 from urllib.parse import parse_qs, urlparse
 import qrcode
 
@@ -9,8 +10,20 @@ import qrcode
 
 def imprimir_qr_en_terminal(url):
     """Dada una URL la imprime por terminal como un QR"""
-    #COMPLETAR usando la librería qrcode
-    pass
+    #podria necesitar ajuastar el boxsize o border para que se vea bien en terminal
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    mat = qr.get_matrix()
+    black = "██"
+    white = "  "
+    print()
+    for row in mat:
+        line = "".join(black if cell else white for cell in row)
+        print(line)
+    print()
+    print(url)
+
 
 def get_wifi_ip():
     """Obtiene la IP local asociada a la interfaz de red (por ejemplo, Wi-Fi)."""
@@ -112,16 +125,85 @@ def manejar_descarga(archivo, request_line):
     Si el archivo no existe debe devolver un error.
     Debe incluir los headers: Content-Type, Content-Length y Content-Disposition.
     """
-    # COMPLETAR
-    return b""
+    try:
+        #Verifica si el archivo existe en el disco
+        if not os.path.exists(archivo) or not os.path.isfile(archivo):
+            # 404 Not Found
+            response_line = b"HTTP/1.1 404 Not Found\r\n"
+            headers = b"Content-Type: text/html\r\n\r\n"
+            body = b"<html><body><h1>404 Not Found</h1><p>El archivo solicitado no se encuentra.</p></body></html>"
+            return response_line + headers + body
+        
+        with open(archivo, 'rb') as f:
+            contenido_archivo = f.read()
+        
+        # 200 OK
+        response_line = b"HTTP/1.1 200 OK\r\n"
+        
+        # Obtener Content-Type
+        content_type, _ = mimetypes.guess_type(archivo)
+        headers = (
+            f"Content-Type: {content_type}\r\n"
+            f"Content-Length: {len(contenido_archivo)}\r\n"
+            # Content-Disposition fuerza la descarga y sugiere el nombre
+            f"Content-Disposition: attachment; filename=\"{os.path.basename(archivo)}\"\r\n"
+            b"\r\n"
+        ).encode('utf-8')
+        
+        return response_line + headers + contenido_archivo
+
+    except Exception as e:
+        print(f"Error al manejar la descarga: {e}")
+        # 500 Internal Server Error en caso de otros errores (permiso, lectura, etc.)
+        response_line = b"HTTP/1.1 500 Internal Server Error\r\n"
+        headers = b"Content-Type: text/html\r\n\r\n"
+        body = b"<html><body><h1>500 Internal Server Error</h1><p>Ocurrio un error en el servidor al intentar descargar el archivo.</p></body></html>"
+        return response_line + headers + body
 
 
 def manejar_carga(body, boundary, directorio_destino="."):
     """
     Procesa un POST con multipart/form-data, guarda el archivo y devuelve una página de confirmación.
     """
-    # COMPLETAR
-    return b""
+    filename, file_content = parsear_multipart(body, boundary) 
+    
+    if filename and file_content:
+        # Asegurarse de que el directorio de destino exista
+        os.makedirs(directorio_destino, exist_ok=True)
+        ruta_completa = os.path.join(directorio_destino, filename)
+        
+        try:
+            # Guardar el contenido binario del archivo
+            with open(ruta_completa, 'wb') as f:
+                f.write(file_content)
+            
+            # 200 OK de éxito
+            response_line = b"HTTP/1.1 200 OK\r\n"
+            headers = b"Content-Type: text/html\r\n\r\n"
+            body_html = f"""
+<html>
+  <head><title>Carga Exitosa</title></head>
+  <body>
+    <h1>Archivo Guardado Exitosamente!</h1>
+    <p>El archivo <strong>{filename}</strong> ha sido guardado en el servidor.</p>
+  </body>
+</html>
+""".encode('utf-8')
+            return response_line + headers + body_html
+            
+        except Exception as e:
+            print(f"Error al guardar el archivo: {e}")
+            # 500 Internal Server Error
+            response_line = b"HTTP/1.1 500 Internal Server Error\r\n"
+            headers = b"Content-Type: text/html\r\n\r\n"
+            body_html = b"<html><body><h1>500 Internal Server Error</h1><p>Error al guardar el archivo en el servidor.</p></body></html>"
+            return response_line + headers + body_html
+    else:
+        # Error si no se pudo parsear el archivo
+        response_line = b"HTTP/1.1 400 Bad Request\r\n"
+        headers = b"Content-Type: text/html\r\n\r\n"
+        body_html = b"<html><body><h1>400 Bad Request</h1><p>Error al recibir los datos del archivo.</p></body></html>"
+        return response_line + headers + body_html
 
 
 def start_server(archivo_descarga=None, modo_upload=False):
@@ -131,29 +213,145 @@ def start_server(archivo_descarga=None, modo_upload=False):
     - Si modo_upload=True, se inicia en modo 'upload'.
     """
 
-    # 1. Obtener IP local y poner al servidor a escuchar en un puerto aleatorio
-    #COMPLETAR
+    # Determinar el modo de operación
+    if(archivo_descarga is None):
+        modo = 'upload'
+    else:
+        modo = 'download'
 
-    ip_server = ""
-    puerto = ""
+    # 1. Obtener IP local y poner al servidor a escuchar en un puerto aleatorio ---
+    try:
+        #Crea el socket TCP
+        server_socket = socket(AF_INET, SOCK_STREAM)
+        server_socket.bind(('', 0)) 
+        
+        #Pone el servidor a escuchar conexiones
+        server_socket.listen(1)
+        
+        #Obtiene la IP local (asumiendo que get_wifi_ip() funciona)
+        ip_server = get_wifi_ip()
+        
+        #Obtiene el puerto asignado por el sistema operativo
+        puerto = server_socket.getsockname()[1]
+        
+    except Exception as e:
+        print(f"Error al iniciar el socket: {e}")
+        sys.exit(1)
 
-    server_socket = ""
+    #2. Mostrar información del servidor y el código QR
+    url_base = f"http://{ip_server}:{puerto}"
+    
+    print(f"\nServidor iniciado en modo: **{modo.upper()}**")
+    print("-" * 30)
+    # Genera e imprime el QR de la URL (usando la función auxiliar)
+    imprimir_qr_en_terminal(url_base)
+    print("-" * 30)
+    print("Esperando conexión...")
 
-    # 2. Mostrar información del servidor y el código QR
-    # COMPLETAR: imprimir URL y modo de operación (download/upload)
 
-    # 3. Esperar conexiones y atender un cliente
-    # COMPLETAR:
-    # - aceptar la conexión (accept)
-    # - recibir los datos (recv)
-    # - decodificar la solicitud HTTP
-    # - determinar método (GET/POST) y ruta (/ o /download)
-    # - generar la respuesta correspondiente (HTML o archivo)
-    # - enviar la respuesta al cliente
-    # - cerrar la conexión
+    # --- 3. Esperar conexiones y atender un cliente ---
+    
+    # 3.1 Aceptar la conexión (esto es bloqueante)
+    connection_socket, addr = server_socket.accept()
+    print(f"Conexión establecida desde: {addr[0]}:{addr[1]}")
+    
+    try:
+        #3.2 Recibir los datos (solicitud HTTP)
+        request = connection_socket.recv(65536) 
+        
+        #3.3 Decodificar la solicitud HTTP para procesarla
+        #Divido el request en líneas y el cuerpo (body)
 
-    pass  # Eliminar cuando esté implementado
+        request_decoded = request.decode('iso-8859-1')
+        
+        headers_end = request_decoded.find('\r\n\r\n')
+        headers = request_decoded[:headers_end]
+        body = request[headers_end + 4:] # Body en bytes
+        
+        #Obtener la primera línea
+        request_line = headers.split('\n')[0].strip()
+        
+        if not request_line:
+            raise ValueError("Solicitud vacía o mal formada.")
+            
+        # Determinar el método y la ruta
+        metodo, ruta, _ = request_line.split()
 
+        #Manejo de Solicitudes
+
+        respuesta = b""
+        
+        if metodo == 'GET':
+            if ruta == '/':
+                # Petición de la página principal (interfaz)
+                html_contenido = generar_html_interfaz(modo)
+                
+                # Respuesta 200 OK con HTML
+                response_line = b"HTTP/1.1 200 OK\r\n"
+                headers_response = (
+                    b"Content-Type: text/html; charset=utf-8\r\n"
+                    f"Content-Length: {len(html_contenido)}\r\n"
+                    b"\r\n"
+                ).encode('utf-8')
+                respuesta = response_line + headers_response + html_contenido.encode('utf-8')
+                
+            elif modo == 'download' and ruta == '/download':
+                # Petición del archivo a descargar
+                # Manejar_descarga genera 200 OK o 404 Not Found
+                respuesta = manejar_descarga(archivo_descarga, request_line)
+            
+            else:
+                # Cualquier otra ruta GET (404)
+                response_line = b"HTTP/1.1 404 Not Found\r\n"
+                headers_response = b"Content-Type: text/html\r\n\r\n"
+                body_404 = b"<html><body><h1>404 Not Found</h1></body></html>"
+                respuesta = response_line + headers_response + body_404
+        
+        elif metodo == 'POST' and modo == 'upload':
+            # Petición de carga de archivo (upload)
+            
+            # Buscar el boundary en los headers (ej: Content-Type: multipart/form-data; boundary=----WebKitFormBoundary...)
+            boundary = None
+            for header_line in headers.split('\n'):
+                if header_line.lower().startswith('content-type:') and 'multipart/form-data' in header_line.lower():
+                    # Extraer el valor del boundary
+                    try:
+                        # Buscar 'boundary=' y extraer el valor (quitando espacios y comillas si las hay)
+                        boundary = header_line.split('boundary=')[1].strip().strip('"')
+                        if boundary:
+                            boundary = boundary.encode('iso-8859-1') # Codificar el boundary
+                        break
+                    except IndexError:
+                        pass # No se encontró el boundary correctamente
+
+            if boundary:
+                # Manejar_carga genera 200 OK (guardado) o 500 Internal Error (al guardar)
+                respuesta = manejar_carga(body, boundary)
+            else:
+                # 400 Bad Request si es un POST mal formado (sin boundary)
+                response_line = b"HTTP/1.1 400 Bad Request\r\n"
+                headers_response = b"Content-Type: text/html\r\n\r\n"
+                body_400 = b"<html><body><h1>400 Bad Request</h1><p>POST mal formado.</p></body></html>"
+                respuesta = response_line + headers_response + body_400
+
+        else:
+            # Método o modo no soportado
+            response_line = b"HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+            respuesta = response_line
+        
+        # 3.4 Enviar la respuesta al cliente
+        if respuesta:
+            connection_socket.sendall(respuesta)
+            print(f"Respuesta enviada para {metodo} {ruta}")
+            
+    except Exception as e:
+        print(f"Error al procesar la conexión: {e}")
+        
+    finally:
+        # 3.5 Cerrar la conexión
+        connection_socket.close()
+        server_socket.close()
+        print("Conexión y servidor cerrados.")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
