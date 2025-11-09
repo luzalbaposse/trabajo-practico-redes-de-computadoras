@@ -143,14 +143,15 @@ def manejar_descarga(archivo, request_line):
         # Obtener Content-Type
         content_type, _ = mimetypes.guess_type(archivo)
         headers = (
-            f"Content-Type: {content_type}\r\n"
-            f"Content-Length: {len(contenido_archivo)}\r\n"
+            "Content-Type: {content_type}\r\n"
+            "Content-Length: {len(contenido_archivo)}\r\n"
             # Content-Disposition fuerza la descarga y sugiere el nombre
-            f"Content-Disposition: attachment; filename=\"{os.path.basename(archivo)}\"\r\n"
-            b"\r\n"
-        ).encode('utf-8')
+            "Content-Disposition: attachment; filename=\"{os.path.basename(archivo)}\"\r\n"
+            "\r\n"
+        )
+        headers_bytes = headers.encode('utf-8')
         
-        return response_line + headers + contenido_archivo
+        return response_line + headers_bytes + contenido_archivo
 
     except Exception as e:
         print(f"Error al manejar la descarga: {e}")
@@ -289,11 +290,12 @@ def start_server(archivo_descarga=None, modo_upload=False):
                 # Respuesta 200 OK con HTML
                 response_line = b"HTTP/1.1 200 OK\r\n"
                 headers_response = (
-                    b"Content-Type: text/html; charset=utf-8\r\n"
-                    f"Content-Length: {len(html_contenido)}\r\n"
-                    b"\r\n"
-                ).encode('utf-8')
-                respuesta = response_line + headers_response + html_contenido.encode('utf-8')
+                    "Content-Type: text/html; charset=utf-8\r\n"
+                    "Content-Length: {len(html_contenido)}\r\n"
+                    "\r\n"
+                )
+                headers_response_bytes = headers_response.encode('utf-8')
+                respuesta = response_line + headers_response_bytes + html_contenido.encode('utf-8')
                 
             elif modo == 'download' and ruta == '/download':
                 # Petición del archivo a descargar
