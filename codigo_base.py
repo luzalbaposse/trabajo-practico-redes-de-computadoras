@@ -3,14 +3,30 @@ import sys
 import os
 from urllib.parse import parse_qs, urlparse
 import qrcode
-
+import socket
 
 #FUNCIONES AUXILIARES
 
 def imprimir_qr_en_terminal(url):
-    """Dada una URL la imprime por terminal como un QR"""
-    #COMPLETAR usando la librería qrcode
-    pass
+    """
+    Requiere: url: str, la URL a imprimir como QR
+    Ejecuta: imprime el QR de la URL en el terminal
+    Devuelve: None
+    """
+
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    mat = qr.get_matrix()
+    black = "██"
+    white = "  "
+    print()
+    for row in mat:
+        line = "".join(black if cell else white for cell in row)
+        print(line)
+    print()
+    print(url)
+
 
 def get_wifi_ip():
     """Obtiene la IP local asociada a la interfaz de red (por ejemplo, Wi-Fi)."""
@@ -21,6 +37,53 @@ def get_wifi_ip():
     finally:
         s.close()
     return ip #Devuelve la IP como string
+
+def parsear_headers_y_body(data):
+    """
+    Separa los headers del body en un request HTTP.
+    Requiere: data: bytes, los datos completos del request HTTP
+    Devuelve: tuple (headers: dict, body: bytes), diccionario de headers y body en bytes
+    """
+    # Decodificar para buscar el separador de headers/body
+    request_text = data.decode("utf-8", errors="ignore")
+    
+    # Buscar el separador entre headers y body (\r\n\r\n o \n\n)
+    header_end = request_text.find("\r\n\r\n")
+    if header_end == -1:
+        header_end = request_text.find("\n\n")
+        header_text = request_text[:header_end]
+        body = data[header_end + 2:]
+    else:
+        header_text = request_text[:header_end]
+        body = data[header_end + 4:]  # +4 para saltar \r\n\r\n
+    
+    # Parsear los headers en un diccionario
+    headers = {}
+    for line in header_text.split("\r\n")[1:]:  # [1:] para saltar la request line
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+    
+    return headers, body
+
+def extraer_boundary(headers):
+    """
+    Extrae el boundary del header Content-Type.
+    Requiere: headers: dict, diccionario con los headers HTTP (claves en minúsculas)
+    Devuelve: str o None, el boundary si existe, None si no se encuentra
+    """
+    if "content-type" not in headers:
+        return None
+    
+    content_type = headers["content-type"]
+    if "boundary=" not in content_type:
+        return None
+    
+    # El formato es: multipart/form-data; boundary=VALOR
+    boundary = content_type.split("boundary=")[1].strip()
+    # Limpiar comillas o espacios extra
+    boundary = boundary.strip('"').strip()
+    return boundary
 
 def parsear_multipart(body, boundary):
     """Función auxiliar (ya implementada) para parsear multipart/form-data."""
@@ -134,15 +197,27 @@ def start_server(archivo_descarga=None, modo_upload=False):
     # 1. Obtener IP local y poner al servidor a escuchar en un puerto aleatorio
     #COMPLETAR
 
-    ip_server = ""
-    puerto = ""
+    ip_server = get_wifi_ip()
+    puerto = 0  
 
-    server_socket = ""
+    method = None
+
+    server_socket = socket(AF_INET, SOCK_STREAM)
+    server_socket.bind((ip_server, puerto))
+    server_socket.listen(1)
 
     # 2. Mostrar información del servidor y el código QR
     # COMPLETAR: imprimir URL y modo de operación (download/upload)
+    url = f"http://{ip_server}:{puerto}"
+    print(f"El server está listo! La URL es: {url}")
+    imprimir_qr_en_terminal(url)
 
-    # 3. Esperar conexiones y atender un cliente
+    if modo_upload:
+        print("El server está en modo upload")
+    else:
+        print("El server está en modo download")
+
+    # 3. Esperar conexiones y atender un cliente (accept, recv, decode, determine, generate, send, close)
     # COMPLETAR:
     # - aceptar la conexión (accept)
     # - recibir los datos (recv)
@@ -152,7 +227,52 @@ def start_server(archivo_descarga=None, modo_upload=False):
     # - enviar la respuesta al cliente
     # - cerrar la conexión
 
-    pass  # Eliminar cuando esté implementado
+    while True: 
+        # Aceptar la conexión
+        client_socket, client_address = server_socket.accept()
+        print(f"Se estableció una conexión con {client_address} ✨")
+
+        # Recibir los datos
+        data = client_socket.recv(65535)
+        # Decodificar los datos
+        request_line = data.decode("utf-8")
+
+        if request_line.startswith("GET"):
+            method = "GET"
+            path = request_line.split(" ")[1]
+            if path == "/":
+                response = generar_html_interfaz(method)
+            elif path == "/download":
+                response = manejar_descarga(archivo_descarga, request_line)
+            elif path == "/upload":
+                response = manejar_carga(data, boundary)
+        
+        elif request_line.startswith("POST"):
+            method = "POST"
+            path = request_line.split(" ")[1]
+            if path == "/" or path == "":
+                # El cliente quiere enviar un archivo
+                # Separar headers del body usando función auxiliar
+                headers, body = parsear_headers_y_body(data)
+                
+                # Extraer el boundary del Content-Type
+                boundary = extraer_boundary(headers)
+                
+                if boundary:
+                    # Parsear multipart y procesar el archivo
+                    response = manejar_carga(body, boundary, directorio_destino=".")
+                else:
+                    response = b"HTTP/1.1 400 Bad Request\r\n\r\n"
+            else:
+                modo_actual = 'upload' if modo_upload else 'download'
+                response = generar_html_interfaz(modo_actual)
+        else:
+            response = b"HTTP/1.1 400 Bad Request\r\n\r\n"
+
+        # Enviar la respuesta al cliente
+        client_socket.sendall(response)
+        # Cerrar la conexión
+        client_socket.close()
 
 
 if __name__ == "__main__":
