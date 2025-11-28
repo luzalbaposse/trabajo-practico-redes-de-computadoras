@@ -221,7 +221,6 @@ def generar_html_interfaz(modo, directorio_archivos="archivos_servidor"):
 """
 
 
-
 #CODIGO A COMPLETAR
 
 def manejar_descarga(archivo, request_line, headers=None, comprimir_gzip=False):
@@ -478,10 +477,11 @@ def start_server(archivo_descarga=None, modo_upload=False, comprimir_gzip=False,
 
                 # Parsear headers para todas las solicitudes
                 headers = {}
+                body_inicial = b""
                 try:
                     headers, _ = parsear_headers_y_body(data)
                 except:
-                    headers = {}
+                    headers, body_inicial = {}, b""
                 
                 # Verificar autenticación si está habilitada
                 if password is not None:
@@ -546,80 +546,95 @@ def start_server(archivo_descarga=None, modo_upload=False, comprimir_gzip=False,
                     else:
                         # Ruta no encontrada
                         response = b"HTTP/1.1 404 Not Found\r\n\r\n"
-                
-            elif method == "POST":
-                if path == "/" or path == "":
-                    # El cliente quiere enviar un archivo
-                    # Los headers ya fueron parseados arriba
-                    _, body = parsear_headers_y_body(data)
-                    
-                    # Extraer el boundary del Content-Type
-                    boundary = extraer_boundary(headers)
-                    
-                    if boundary:
-                        # Parsear multipart y procesar el archivo
-                        # Asegurar que el directorio archivos_servidor existe
-                        if not os.path.exists("archivos_servidor"):
-                            os.makedirs("archivos_servidor", exist_ok=True)
-                        response = manejar_carga(body, boundary, directorio_destino="archivos_servidor")
-                        
-                        # Comprimir respuesta HTML si está habilitado y el cliente lo acepta
+                    body_completo = None
+
+                elif method == "POST":
+                    # 1) Asegurar lectura COMPLETA del body según content-length:
+                    #    headers y body_inicial ya fueron parseados arriba con parsear_headers_y_body
+                    body_completo = body_inicial
+                    try:
+                        content_length = int(headers.get("content-length", "0"))
+                    except ValueError:
+                        content_length = 0
+
+                    # Leer lo que falta si el body no llegó todo en el primer recv
+                    bytes_faltantes = content_length - len(body_completo)
+                    while bytes_faltantes > 0:
+                        chunk = client_socket.recv(min(65535, bytes_faltantes))
+                        if not chunk:
+                            break
+                        body_completo += chunk
+                        bytes_faltantes -= len(chunk)
+
+                    # 2) Procesar la ruta
+                    if path == "/" or path == "":
+                        boundary = extraer_boundary(headers)
+
+                        if boundary and body_completo:
+                            # Asegurar directorio de destino para guardar archivos
+                            if not os.path.exists("archivos_servidor"):
+                                os.makedirs("archivos_servidor", exist_ok=True)
+
+                            # Procesar el archivo subido
+                            response = manejar_carga(body_completo, boundary, directorio_destino="archivos_servidor")
+
+                            # 3) Si GZIP está habilitado y el cliente lo admite -> comprimir respuesta HTML
+                            if comprimir_gzip:
+                                accept_encoding = headers.get('accept-encoding', '')
+                                if 'gzip' in accept_encoding.lower():
+                                    # Sacar headers y body
+                                    response_parts = response.split(b'\r\n\r\n', 1)
+                                    if len(response_parts) == 2:
+                                        headers_resp, body_resp = response_parts
+                                        body_comprimido = gzip.compress(body_resp)
+
+                                        # Actualizar Content-Length en los headers
+                                        headers_resp = headers_resp.replace(
+                                            f'Content-Length: {len(body_resp)}'.encode('utf-8'),
+                                            f'Content-Length: {len(body_comprimido)}'.encode('utf-8')
+                                        )
+                                        # Agregar Content-Encoding si no está
+                                        if b'Content-Encoding: gzip' not in headers_resp:
+                                            headers_resp = headers_resp.replace(
+                                                b'Content-Type: text/html\r\n',
+                                                b'Content-Type: text/html\r\nContent-Encoding: gzip\r\n'
+                                            )
+
+                                        response = headers_resp + b'\r\n\r\n' + body_comprimido
+                        else:
+                            # No había boundary o body -> no se pudo procesar el POST
+                            response = b"HTTP/1.1 400 Bad Request\r\n\r\n"
+
+                    else:
+                        # Si hacen POST a otra ruta, devolvés el HTML normal
+                        modo_actual = 'both' if modo_upload else 'download'
+                        html_content = generar_html_interfaz(modo_actual, directorio_archivos="archivos_servidor")
+                        html_bytes = html_content.encode('utf-8')
+
+                        # Compresión si aplica
+                        acepta_gzip = False
                         if comprimir_gzip:
                             accept_encoding = headers.get('accept-encoding', '')
                             if 'gzip' in accept_encoding.lower():
-                                # Extraer el body de la respuesta
-                                response_parts = response.split(b'\r\n\r\n', 1)
-                                if len(response_parts) == 2:
-                                    headers_resp = response_parts[0]
-                                    body_resp = response_parts[1]
-                                    # Comprimir el body
-                                    body_comprimido = gzip.compress(body_resp)
-                                    # Reconstruir la respuesta con Content-Encoding y nuevo Content-Length
-                                    headers_resp = headers_resp.replace(
-                                        f'Content-Length: {len(body_resp)}'.encode('utf-8'),
-                                        f'Content-Length: {len(body_comprimido)}'.encode('utf-8')
-                                    )
-                                    if b'Content-Encoding: gzip' not in headers_resp:
-                                        headers_resp = headers_resp.replace(
-                                            b'Content-Type: text/html\r\n',
-                                            b'Content-Type: text/html\r\nContent-Encoding: gzip\r\n'
-                                        )
-                                    response = headers_resp + b'\r\n\r\n' + body_comprimido
-                    else:
-                        response = b"HTTP/1.1 400 Bad Request\r\n\r\n"
-                else:
-                    modo_actual = 'both' if modo_upload else 'download'
-                    html_content = generar_html_interfaz(modo_actual, directorio_archivos="archivos_servidor")
-                    html_bytes = html_content.encode('utf-8')
-                    
-                    # Verificar si el cliente acepta compresión gzip
-                    acepta_gzip = False
-                    if comprimir_gzip:
-                        accept_encoding = headers.get('accept-encoding', '')
-                        if 'gzip' in accept_encoding.lower():
-                            acepta_gzip = True
-                    
-                    # Comprimir HTML si está habilitado y el cliente lo acepta
-                    if acepta_gzip:
-                        html_bytes = gzip.compress(html_bytes)
-                    
-                    response = b"HTTP/1.1 200 OK\r\n"
-                    response += b"Content-Type: text/html\r\n"
-                    if acepta_gzip:
-                        response += b"Content-Encoding: gzip\r\n"
-                    response += f"Content-Length: {len(html_bytes)}\r\n".encode('utf-8')
-                    response += b"\r\n"
-                    response += html_bytes
-                else:
-                    response = b"HTTP/1.1 400 Bad Request\r\n\r\n"
+                                acepta_gzip = True
+                        if acepta_gzip:
+                            html_bytes = gzip.compress(html_bytes)
+
+                        response = b"HTTP/1.1 200 OK\r\n"
+                        response += b"Content-Type: text/html\r\n"
+                        if acepta_gzip:
+                            response += b"Content-Encoding: gzip\r\n"
+                        response += f"Content-Length: {len(html_bytes)}\r\n".encode('utf-8')
+                        response += b"\r\n"
+                        response += html_bytes
 
                 # Enviar la respuesta al cliente
                 if medir_tiempo:
-                    inicio = time.time()
+                    inicio = time.perf_counter()
                     client_socket.sendall(response)
-                    duracion = time.time() - inicio
+                    duracion = time.perf_counter() - inicio
                     tamaño_respuesta = len(response)
-                    print(f"[MEDICIÓN] Tiempo de envío: {duracion:.4f} s | Tamaño respuesta: {tamaño_respuesta} bytes")
+                    print(f"[MEDICIÓN] Tiempo de envío: {duracion:.20f} s | Tamaño respuesta: {tamaño_respuesta} bytes")
                 else:
                     client_socket.sendall(response)
                 # Cerrar la conexión
@@ -629,7 +644,8 @@ def start_server(archivo_descarga=None, modo_upload=False, comprimir_gzip=False,
                 # El cliente cerró la conexión abruptamente
                 try:
                     print(f"Conexión cerrada por el cliente")
-                    client_socket.close()
+                    if client_socket:
+                        client_socket.close()
                 except:
                     pass
                 continue
@@ -637,7 +653,8 @@ def start_server(archivo_descarga=None, modo_upload=False, comprimir_gzip=False,
                 # Cualquier otro error
                 print(f"Error al procesar la solicitud: {e}")
                 try:
-                    client_socket.close()
+                    if client_socket:
+                        client_socket.close()
                 except:
                     pass
                 continue
@@ -656,8 +673,8 @@ def start_server(archivo_descarga=None, modo_upload=False, comprimir_gzip=False,
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Uso:")
-        print("  python codigo_base.py upload [--gzip] [--password CONTRASEÑA] [--measure]                    # Servidor para subir archivos")
-        print("  python codigo_base.py download archivo.txt [--gzip] [--password CONTRASEÑA] [--measure]      # Servidor para descargar un archivo")
+        print("  python codigo_base.py upload [--gzip] [--password CONTRASEÑA] [--measure]                         # Servidor para subir archivos")
+        print("  python codigo_base.py download archivo.txt [--gzip] [--password CONTRASEÑA] [--measure]          # Servidor para descargar un archivo")
         sys.exit(1)
 
     # Verificar si se solicitó compresión gzip
