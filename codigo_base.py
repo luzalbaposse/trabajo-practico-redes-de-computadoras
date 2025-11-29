@@ -31,7 +31,7 @@ def imprimir_qr_en_terminal(url):
 
 
 def get_wifi_ip():
-    """Obtiene la IP local asociada a la interfaz de red (por ejemplo, Wi-Fi)."""
+    """Obtiene la IP local asociada a la interfaz de red"""
     s = socket(AF_INET, SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
@@ -88,7 +88,6 @@ def extraer_boundary(headers):
     return boundary
 
 def parsear_multipart(body, boundary):
-    """Función auxiliar (ya implementada) para parsear multipart/form-data."""
     try:
         # Se divide el cuerpo por el boundary para luego poder extraer el nombre y contenido del archivo
         parts = body.split(f'--{boundary}'.encode())
@@ -280,7 +279,7 @@ def manejar_descarga(archivo, request_line, headers=None, comprimir_gzip=False):
         return response
     
     except Exception as e:
-        # Error al leer el archivo - devolver 500
+        # Error al leer el archivo -> devolver 500
         print(f"Error al leer el archivo: {e}")
         response = b"HTTP/1.1 500 Internal Server Error\r\n"
         response += b"Content-Type: text/html\r\n"
@@ -299,7 +298,7 @@ def manejar_carga(body, boundary, directorio_destino="."):
         
         # Verificar que se pudo extraer el archivo correctamente
         if filename is None or file_content is None:
-            # No se pudo parsear el archivo - devolver 400 Bad Request
+            # No se pudo parsear el archivo -> devolver 400 Bad Request
             error_html = """
             <html>
               <head><title>Error</title></head>
@@ -356,7 +355,7 @@ def manejar_carga(body, boundary, directorio_destino="."):
         return response
     
     except Exception as e:
-        # Error al procesar o guardar el archivo - devolver 500 Internal Server Error
+        # Error al procesar o guardar el archivo -> devolver 500 Internal Server Error
         print(f"Error al procesar la carga del archivo: {e}")
         error_html = f"""
         <html>
@@ -387,7 +386,6 @@ def start_server(archivo_descarga=None, modo_upload=False, comprimir_gzip=False,
     """
 
     # 1. Obtener IP local y poner al servidor a escuchar en un puerto aleatorio
-    #COMPLETAR
 
     ip_server = get_wifi_ip()
     # Permitir especificar puerto mediante variable de entorno (opcional)
@@ -402,7 +400,6 @@ def start_server(archivo_descarga=None, modo_upload=False, comprimir_gzip=False,
     server_socket.listen(1)
 
     # 2. Mostrar información del servidor y el código QR
-    # COMPLETAR: imprimir URL y modo de operación (download/upload)
     url = f"http://{ip_server}:{puerto}"
     print(f"El server está listo! La URL es: {url}")
     imprimir_qr_en_terminal(url)
@@ -413,7 +410,6 @@ def start_server(archivo_descarga=None, modo_upload=False, comprimir_gzip=False,
         print("El server está en modo download")
 
     # 3. Esperar conexiones y atender un cliente (accept, recv, decode, determine, generate, send, close)
-    # COMPLETAR:
     # - aceptar la conexión (accept)
     # - recibir los datos (recv)
     # - decodificar la solicitud HTTP
